@@ -110,6 +110,47 @@ def _build_assistant_payload(meta_pb: bytes, text: str) -> bytes:
     )
 
 
+def _build_trajectory_metadata(
+    created_sec: int,
+    client_uuid: str,
+    conv_id: str,
+    project_id: str = "outside-of-project",
+) -> bytes:
+    return (
+        _pb_ts(2, created_sec)
+        + _pb_str(3, client_uuid)
+        + _pb_str(6, conv_id)
+        + _pb_str(18, project_id)
+    )
+
+
+def _build_raw_summary(
+    title: str,
+    step_count: int,
+    created_sec: int,
+    last_mod_sec: int,
+    last_user_sec: int,
+    last_user_idx: int,
+    traj_id: str,
+    traj_meta_pb: bytes,
+) -> bytes:
+    annot_pb = _pb_str(1, title) + _pb_ts(7, last_mod_sec)
+    return (
+        _pb_str(1, title)
+        + _pb_varint(2, step_count)
+        + _pb_ts(3, last_mod_sec)
+        + _pb_str(4, traj_id)
+        + _pb_varint(5, 1)
+        + _pb_ts(7, created_sec)
+        + _pb_ts(10, last_user_sec)
+        + _pb_bytes(15, annot_pb)
+        + _pb_varint(16, last_user_idx)
+        + _pb_bytes(17, traj_meta_pb)
+        + _pb_varint(22, 4)
+        + _pb_varint(28, 4)
+    )
+
+
 # ---------------------------------------------------------------- SQLite schema
 
 CONV_DB_SCHEMA = """
@@ -214,6 +255,7 @@ def import_omp_to_agy(
     transcript_path = (
         target_root / "brain" / conv_id / ".system_generated" / "logs" / "transcript.jsonl"
     )
+    annot_path = target_root / "annotations" / f"{conv_id}.pbtxt"
     summaries_db_path = target_root / "conversation_summaries.db"
 
     if not apply:
@@ -228,13 +270,20 @@ def import_omp_to_agy(
 
     conv_db_path.parent.mkdir(parents=True, exist_ok=True)
     transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    annot_path.parent.mkdir(parents=True, exist_ok=True)
 
     now_sec = int(time.time())
+    created_sec = now_sec - max(10, len(msgs) * 2)
+    client_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"ctxbridge-client:{omp_id}"))
+    traj_meta_pb = _build_trajectory_metadata(created_sec, client_uuid, conv_id, "outside-of-project")
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f+00:00")
     last_user_idx = 0
+    last_user_sec = created_sec
 
     con = sqlite3.connect(str(conv_db_path))
     try:
+        con.execute("PRAGMA journal_mode = WAL")
+        con.execute("PRAGMA user_version = 1")
         con.executescript(CONV_DB_SCHEMA)
         con.execute("DELETE FROM trajectory_meta")
         con.execute("DELETE FROM steps")
@@ -242,12 +291,17 @@ def import_omp_to_agy(
             "INSERT INTO trajectory_meta (trajectory_id, cascade_id, trajectory_type, source) VALUES (?, ?, 4, 1)",
             (traj_id, conv_id),
         )
+        con.execute(
+            "INSERT OR REPLACE INTO trajectory_metadata_blob (id, data) VALUES ('main', ?)",
+            (sqlite3.Binary(traj_meta_pb),),
+        )
         t_lines: list[str] = []
         for idx, (role, text) in enumerate(msgs):
             step_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{conv_id}:step:{idx}"))
             ts = now_sec - max(0, (len(msgs) - idx) * 2)
             if role == "user":
                 last_user_idx = idx
+                last_user_sec = ts
                 step_type = 14
                 meta_pb = _build_metadata(ts, 4, step_uuid, traj_id, idx, conv_id)
                 payload_pb = _build_user_payload(
@@ -293,8 +347,21 @@ def import_omp_to_agy(
         con.close()
 
     transcript_path.write_text("\n".join(t_lines) + "\n", encoding="utf-8")
+    annot_path.write_text(
+        f"title:{json.dumps(title, ensure_ascii=False)} last_user_view_time:{{seconds:{now_sec} nanos:0}}",
+        encoding="utf-8",
+    )
 
-    preview = ctxbridge.redact((summary or msgs[-1][1])[:240])
+    raw_summary_pb = _build_raw_summary(
+        title=title,
+        step_count=len(msgs),
+        created_sec=created_sec,
+        last_mod_sec=now_sec,
+        last_user_sec=last_user_sec,
+        last_user_idx=last_user_idx,
+        traj_id=traj_id,
+        traj_meta_pb=traj_meta_pb,
+    )
     summary_updated = False
     summary_warning = None
     try:
@@ -308,7 +375,7 @@ def import_omp_to_agy(
             row_map = {
                 "conversation_id": conv_id,
                 "title": title,
-                "preview": preview,
+                "preview": title,
                 "step_count": len(msgs),
                 "last_modified_time": now_iso,
                 "workspace_uris": "",
@@ -316,9 +383,10 @@ def import_omp_to_agy(
                 "source": "",
                 "project_id": "outside-of-project",
                 "agent_name": "",
+                "app_data_dir": "antigravity",
                 "last_user_input_time": now_iso,
                 "last_user_input_step_index": last_user_idx,
-                "raw_summary": ctxbridge.redact(summary or ""),
+                "raw_summary": sqlite3.Binary(raw_summary_pb),
             }
             cols = [c for c in row_map if c in existing_cols]
             placeholders = ", ".join("?" for _ in cols)

@@ -237,19 +237,31 @@ class McpUnitTests(unittest.TestCase):
         conv_db = self.agy_dir / "conversations" / f"{cid}.db"
         self.assertTrue(conv_db.is_file())
         con = sqlite3.connect(str(conv_db))
+        u_ver = con.execute("PRAGMA user_version").fetchone()[0]
+        tmb = con.execute("SELECT id, data FROM trajectory_metadata_blob").fetchall()
         steps = con.execute("SELECT idx, step_type, step_payload FROM steps ORDER BY idx").fetchall()
         con.close()
+        self.assertEqual(u_ver, 1)
+        self.assertEqual(len(tmb), 1)
+        self.assertEqual(tmb[0][0], "main")
+        self.assertGreater(len(tmb[0][1]), 10)
         self.assertGreaterEqual(len(steps), 3)
         self.assertEqual(steps[0][1], 14)
         self.assertEqual(steps[1][1], 15)
         self.assertNotIn(b"sk-" + (b"A" * 20), steps[0][2])
 
+        annot = self.agy_dir / "annotations" / f"{cid}.pbtxt"
+        self.assertTrue(annot.is_file())
+        self.assertTrue(annot.read_text(encoding="utf-8").startswith("title:"))
+
         scon = sqlite3.connect(str(self.agy_dir / "conversation_summaries.db"))
-        row = scon.execute("SELECT title, step_count FROM conversation_summaries WHERE conversation_id=?", (cid,)).fetchone()
+        row = scon.execute("SELECT title, step_count, raw_summary FROM conversation_summaries WHERE conversation_id=?", (cid,)).fetchone()
         scon.close()
         self.assertIsNotNone(row)
         self.assertTrue(row[0].startswith("[OMP]"))
         self.assertEqual(row[1], len(steps))
+        self.assertIsInstance(row[2], bytes)
+        self.assertGreater(len(row[2]), 30)
 
 
 class McpStdioSubprocessTests(unittest.TestCase):
