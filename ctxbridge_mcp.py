@@ -159,21 +159,28 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "import_omp_to_agy",
-        "description": "Convert an OMP session into a native Antigravity conversation DB + summary row (experimental).",
+        "description": "Convert one or more OMP sessions into native Antigravity conversation DBs (with native CHECKPOINT compaction steps and full timeline).",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "id": {
                     "type": "string",
                     "default": "latest",
-                    "description": "OMP session ID prefix (min 8 chars) or 'latest'.",
+                    "description": "OMP session ID prefix (min 8 chars), 'latest', or 'all' for batch import.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 20,
+                    "minimum": 1,
+                    "maximum": 500,
+                    "description": "Max sessions to import when id='all' (1..500).",
                 },
                 "max_messages": {
                     "type": "integer",
-                    "default": 30,
-                    "minimum": 1,
-                    "maximum": 200,
-                    "description": "Max recent messages to include (1..200).",
+                    "default": 0,
+                    "minimum": 0,
+                    "maximum": 5000,
+                    "description": "Max recent message turns to include (0 = full conversation).",
                 },
                 "apply": {
                     "type": "boolean",
@@ -534,13 +541,22 @@ def tool_get_handoff(args: dict[str, Any]) -> str:
 
 def tool_import_omp_to_agy(args: dict[str, Any]) -> str:
     ident = str(args.get("id") or "latest")
-    max_messages = _clamp_int(args.get("max_messages"), 30, 1, 200)
+    limit = _clamp_int(args.get("limit"), 20, 1, 500)
+    max_messages = _clamp_int(args.get("max_messages"), 0, 0, 5000)
     apply = bool(args.get("apply", True))
-    res = ctxbridge_import.import_omp_to_agy(
-        ident=ident,
-        max_messages=max_messages,
-        apply=apply,
-    )
+    if ident.lower() == "all":
+        res = ctxbridge_import.import_omp_batch(
+            limit=limit,
+            all_sessions=False,
+            max_messages=max_messages,
+            apply=apply,
+        )
+    else:
+        res = ctxbridge_import.import_omp_to_agy(
+            ident=ident,
+            max_messages=max_messages,
+            apply=apply,
+        )
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 

@@ -16,7 +16,7 @@ Two-way **stdio MCP server** (plus CLI & GUI) that lets **Oh My Pi (`omp`)** and
 | `search_sessions` | Case-insensitive keyword search across OMP titles/`history.db` recaps and Antigravity summaries/FTS (`query`, `source`, `limit`). |
 | `save_handoff` | Save a redacted handoff summary + next steps to `~/.ctxbridge/handoffs/` without touching `AGENTS.md` or `GEMINI.md`. |
 | `get_handoff` | Read recent handoff notes saved by the other harness (optional `project` filter). |
-| `import_omp_to_agy` | *(Experimental)* Convert an OMP session into a native Antigravity conversation DB + summary row (`conversations/<uuid>.db`). |
+| `import_omp_to_agy` | Convert one or batch-import OMP sessions (`id="latest"\|"all"`, `limit`) into native Antigravity conversation DBs, mapping OMP compactions to native `CHECKPOINT` (`step_type=23`) steps and preserving full timelines. |
 
 ## Setup
 
@@ -79,6 +79,11 @@ python ctxbridge.py inject omp pack.md --project /path/to/project          # dry
 python ctxbridge.py inject omp pack.md --project /path/to/project --apply  # writes
 python ctxbridge_gui.py            # GUI
 python ctxbridge_gui.py --selftest # headless smoke test
+
+# Import OMP sessions directly as native Antigravity conversations
+python ctxbridge_import.py --id latest --apply
+python ctxbridge_import.py --limit 20 --apply
+python ctxbridge_import.py --all --apply
 ```
 
 ## Tests
@@ -92,7 +97,7 @@ python -m unittest discover -v
 ## Files
 
 - `ctxbridge_mcp.py`: Pure-stdlib stdio JSON-RPC 2.0 MCP server (6 tools)
-- `ctxbridge_import.py`: Experimental OMP-to-Antigravity native conversation DB converter (`--id`, `--apply`)
+- `ctxbridge_import.py`: OMP-to-Antigravity native conversation DB converter (`--id`, `--limit N`, `--all`, `--apply`) with native `CHECKPOINT` (`step_type=23`) compaction mapping and assistant fragment merging
 - `ctxbridge.py`: Core session parser, redactor, token budgeter, and CLI
 - `ctxbridge_gui.py`: Optional tkinter front end
 - `test_ctxbridge.py` & `test_ctxbridge_mcp.py`: Unit and stdio subprocess test suites

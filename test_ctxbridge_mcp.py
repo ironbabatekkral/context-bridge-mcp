@@ -31,9 +31,12 @@ def _make_fixtures(root: Path, home: Path) -> tuple[Path, Path, Path]:
     lines = [
         {"type": "session", "id": "omp12345678", "cwd": str(proj_dir), "timestamp": "2026-11-19T01:00:00Z"},
         {"type": "title", "title": "Fix auth flow in demo-app"},
-        {"type": "compaction", "summary": f"OMP checked {proj_dir} and saw token={fake_sk}"},
-        {"type": "message", "message": {"role": "user", "content": [{"type": "text", "text": "Please check login.py"}]}},
-        {"type": "message", "message": {"role": "assistant", "content": [{"type": "text", "text": "Fixed CORS bug in login.py"}]}},
+        {"type": "message", "timestamp": "2026-11-19T01:00:10Z", "message": {"role": "user", "content": [{"type": "text", "text": "Initial check before compaction"}]}},
+        {"type": "message", "timestamp": "2026-11-19T01:00:20Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "Looked at initial auth files."}]}},
+        {"type": "compaction", "timestamp": "2026-11-19T01:01:00Z", "summary": f"OMP checked {proj_dir} and saw token={fake_sk}"},
+        {"type": "message", "timestamp": "2026-11-19T01:02:00Z", "message": {"role": "user", "content": [{"type": "text", "text": "Please check login.py"}]}},
+        {"type": "message", "timestamp": "2026-11-19T01:02:10Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "Inspecting login.py..."}]}},
+        {"type": "message", "timestamp": "2026-11-19T01:02:20Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "Fixed CORS bug in login.py"}]}},
     ]
     sess_file.write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
 
@@ -225,7 +228,7 @@ class McpUnitTests(unittest.TestCase):
                 "method": "tools/call",
                 "params": {
                     "name": "import_omp_to_agy",
-                    "arguments": {"id": "latest", "max_messages": 10, "apply": True},
+                    "arguments": {"id": "latest", "max_messages": 0, "apply": True},
                 },
             }
         )
@@ -233,6 +236,8 @@ class McpUnitTests(unittest.TestCase):
         res = json.loads(resp["result"]["content"][0]["text"])
         self.assertEqual(res["status"], "imported")
         self.assertTrue(res["summary_db_updated"])
+        self.assertEqual(res["checkpoints"], 1)
+        self.assertEqual(res["user_turns"], 2)
         cid = res["conversation_id"]
         conv_db = self.agy_dir / "conversations" / f"{cid}.db"
         self.assertTrue(conv_db.is_file())
@@ -245,10 +250,16 @@ class McpUnitTests(unittest.TestCase):
         self.assertEqual(len(tmb), 1)
         self.assertEqual(tmb[0][0], "main")
         self.assertGreater(len(tmb[0][1]), 10)
-        self.assertGreaterEqual(len(steps), 3)
-        self.assertEqual(steps[0][1], 14)
-        self.assertEqual(steps[1][1], 15)
-        self.assertNotIn(b"sk-" + (b"A" * 20), steps[0][2])
+        # Timeline: pre-user(14), pre-asst(15), compaction CHECKPOINT(23), post-user(14), merged post-asst(15)
+        self.assertEqual([s[1] for s in steps], [14, 15, 23, 14, 15])
+        self.assertNotIn(b"sk-" + (b"A" * 20), steps[2][2])
+        self.assertIn(b"[REDACTED:", steps[2][2])
+        self.assertIn(b"Inspecting login.py...", steps[4][2])
+        self.assertIn(b"Fixed CORS bug in login.py", steps[4][2])
+
+        tpath = self.agy_dir / "brain" / cid / ".system_generated" / "logs" / "transcript.jsonl"
+        t_types = [json.loads(x)["type"] for x in tpath.read_text(encoding="utf-8").splitlines() if x.strip()]
+        self.assertEqual(t_types, ["USER_INPUT", "PLANNER_RESPONSE", "CHECKPOINT", "USER_INPUT", "PLANNER_RESPONSE"])
 
         annot = self.agy_dir / "annotations" / f"{cid}.pbtxt"
         self.assertTrue(annot.is_file())
@@ -262,6 +273,21 @@ class McpUnitTests(unittest.TestCase):
         self.assertEqual(row[1], len(steps))
         self.assertIsInstance(row[2], bytes)
         self.assertGreater(len(row[2]), 30)
+
+        batch_resp = ctxbridge_mcp.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 23,
+                "method": "tools/call",
+                "params": {
+                    "name": "import_omp_to_agy",
+                    "arguments": {"id": "all", "limit": 5, "apply": True},
+                },
+            }
+        )
+        self.assertFalse(batch_resp["result"]["isError"])
+        bres = json.loads(batch_resp["result"]["content"][0]["text"])
+        self.assertEqual(bres["imported_count"], 1)
 
 
 class McpStdioSubprocessTests(unittest.TestCase):
