@@ -17,6 +17,7 @@ Purpose: Bridge conversation context two-way between **Oh My Pi (`omp`)** and **
      - `search_sessions(query, source="omp"|"agy"|"all", limit=10)`: Searches session titles, OMP `history.db` recaps, and Antigravity `conversation_summaries` / `conversations_fts`.
      - `save_handoff(from_tool, summary, project?, next_steps?)`: Saves a redacted JSON handoff note into `~/.ctxbridge/handoffs/` (overrideable via `CTXBRIDGE_HANDOFF_DIR`) without touching `AGENTS.md` or `GEMINI.md`.
      - `get_handoff(project?, limit=3)`: Retrieves recent handoff notes saved by either harness.
+     - `import_omp_to_agy(id="latest", max_messages=30, apply=True)`: Experimental converter (`ctxbridge_import.py`) that writes an OMP session directly into Antigravity's `conversations/<uuid>.db` (wire-format protobuf `step_type=14/15`) and `conversation_summaries.db`.
 
 3. **Legacy CLI & GUI (`ctxbridge.py`, `ctxbridge_gui.py`)**
    - Preserves `list`, `export`, and dry-run-by-default `inject` commands plus the tkinter GUI (`--selftest` smoke check included).

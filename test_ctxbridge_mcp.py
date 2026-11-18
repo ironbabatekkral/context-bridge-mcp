@@ -127,7 +127,7 @@ class McpUnitTests(unittest.TestCase):
         names = [t["name"] for t in tools_resp["result"]["tools"]]
         self.assertEqual(
             names,
-            ["list_sessions", "get_context_pack", "search_sessions", "save_handoff", "get_handoff"],
+            ["list_sessions", "get_context_pack", "search_sessions", "save_handoff", "get_handoff", "import_omp_to_agy"],
         )
         unk = ctxbridge_mcp.handle_request({"jsonrpc": "2.0", "id": 4, "method": "unknown/foo"})
         self.assertEqual(unk["error"]["code"], -32601)
@@ -217,6 +217,40 @@ class McpUnitTests(unittest.TestCase):
         self.assertNotIn(fake_ai, item["summary"])
         self.assertNotIn(str(self.home), item["project"])
 
+    def test_import_omp_to_agy_creates_valid_db_and_summary(self):
+        resp = ctxbridge_mcp.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 22,
+                "method": "tools/call",
+                "params": {
+                    "name": "import_omp_to_agy",
+                    "arguments": {"id": "latest", "max_messages": 10, "apply": True},
+                },
+            }
+        )
+        self.assertFalse(resp["result"]["isError"])
+        res = json.loads(resp["result"]["content"][0]["text"])
+        self.assertEqual(res["status"], "imported")
+        self.assertTrue(res["summary_db_updated"])
+        cid = res["conversation_id"]
+        conv_db = self.agy_dir / "conversations" / f"{cid}.db"
+        self.assertTrue(conv_db.is_file())
+        con = sqlite3.connect(str(conv_db))
+        steps = con.execute("SELECT idx, step_type, step_payload FROM steps ORDER BY idx").fetchall()
+        con.close()
+        self.assertGreaterEqual(len(steps), 3)
+        self.assertEqual(steps[0][1], 14)
+        self.assertEqual(steps[1][1], 15)
+        self.assertNotIn(b"sk-" + (b"A" * 20), steps[0][2])
+
+        scon = sqlite3.connect(str(self.agy_dir / "conversation_summaries.db"))
+        row = scon.execute("SELECT title, step_count FROM conversation_summaries WHERE conversation_id=?", (cid,)).fetchone()
+        scon.close()
+        self.assertIsNotNone(row)
+        self.assertTrue(row[0].startswith("[OMP]"))
+        self.assertEqual(row[1], len(steps))
+
 
 class McpStdioSubprocessTests(unittest.TestCase):
     def test_real_stdio_process_roundtrip(self):
@@ -255,7 +289,7 @@ class McpStdioSubprocessTests(unittest.TestCase):
             lines = [json.loads(line) for line in proc.stdout.strip().splitlines() if line.strip()]
             self.assertEqual(len(lines), 3)
             self.assertEqual(lines[0]["id"], 1)
-            self.assertEqual(len(lines[1]["result"]["tools"]), 5)
+            self.assertEqual(len(lines[1]["result"]["tools"]), 6)
             sessions = json.loads(lines[2]["result"]["content"][0]["text"])["sessions"]
             self.assertEqual(len(sessions), 2)
 

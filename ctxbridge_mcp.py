@@ -16,7 +16,10 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import ctxbridge  # noqa: E402
+import ctxbridge_import  # noqa: E402
 
+if hasattr(sys.stdin, "reconfigure"):
+    sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
@@ -149,6 +152,33 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "minimum": 1,
                     "maximum": 20,
                     "description": "Maximum number of handoff notes to return (1..20).",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "import_omp_to_agy",
+        "description": "Convert an OMP session into a native Antigravity conversation DB + summary row (experimental).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "default": "latest",
+                    "description": "OMP session ID prefix (min 8 chars) or 'latest'.",
+                },
+                "max_messages": {
+                    "type": "integer",
+                    "default": 30,
+                    "minimum": 1,
+                    "maximum": 200,
+                    "description": "Max recent messages to include (1..200).",
+                },
+                "apply": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Write files when true, or dry-run when false.",
                 },
             },
             "additionalProperties": False,
@@ -502,12 +532,25 @@ def tool_get_handoff(args: dict[str, Any]) -> str:
     return json.dumps({"handoffs": handoffs}, ensure_ascii=False, indent=2)
 
 
+def tool_import_omp_to_agy(args: dict[str, Any]) -> str:
+    ident = str(args.get("id") or "latest")
+    max_messages = _clamp_int(args.get("max_messages"), 30, 1, 200)
+    apply = bool(args.get("apply", True))
+    res = ctxbridge_import.import_omp_to_agy(
+        ident=ident,
+        max_messages=max_messages,
+        apply=apply,
+    )
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
 TOOL_DISPATCH = {
     "list_sessions": tool_list_sessions,
     "get_context_pack": tool_get_context_pack,
     "search_sessions": tool_search_sessions,
     "save_handoff": tool_save_handoff,
     "get_handoff": tool_get_handoff,
+    "import_omp_to_agy": tool_import_omp_to_agy,
 }
 
 
@@ -524,7 +567,7 @@ def handle_request(req: dict[str, Any]) -> dict[str, Any] | None:
             "jsonrpc": "2.0",
             "id": req_id,
             "result": {
-                "protocolVersion": PROTOCOL_VERSION,
+                "protocolVersion": params.get("protocolVersion") or PROTOCOL_VERSION,
                 "capabilities": {"tools": {}},
                 "serverInfo": SERVER_INFO,
             },
