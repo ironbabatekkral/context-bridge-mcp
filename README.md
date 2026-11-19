@@ -16,7 +16,8 @@ Two-way **stdio MCP server** (plus CLI & GUI) that lets **Oh My Pi (`omp`)** and
 | `search_sessions` | Case-insensitive keyword search across OMP titles/`history.db` recaps and Antigravity summaries/FTS (`query`, `source`, `limit`). |
 | `save_handoff` | Save a redacted handoff summary + next steps to `~/.ctxbridge/handoffs/` without touching `AGENTS.md` or `GEMINI.md`. |
 | `get_handoff` | Read recent handoff notes saved by the other harness (optional `project` filter). |
-| `import_omp_to_agy` | Convert one or batch-import OMP sessions (`id="latest"\|"all"`, `limit`) into native Antigravity conversation DBs, mapping OMP compactions to native `CHECKPOINT` (`step_type=23`) steps and preserving full timelines. |
+| `import_omp_to_agy` | Convert one or batch-import OMP sessions (`id="latest"\|"all"`, `limit`) into native Antigravity conversation DBs, mapping OMP compactions to native `CHECKPOINT` (`step_type=23`) steps, extracting images (`omp_media/`), and preserving full timelines. |
+| `import_agy_to_omp` | Convert one or batch-import Antigravity conversations (`id="latest"\|"all"`, `limit`) into native OMP v3 `.jsonl` sessions with `blobs/` image support and `history.db` metadata. |
 
 ## Setup
 
@@ -81,9 +82,12 @@ python ctxbridge_gui.py            # GUI
 python ctxbridge_gui.py --selftest # headless smoke test
 
 # Import OMP sessions directly as native Antigravity conversations
-python ctxbridge_import.py --id latest --apply
-python ctxbridge_import.py --limit 20 --apply
-python ctxbridge_import.py --all --apply
+python ctxbridge_import.py --to agy --id latest --apply
+python ctxbridge_import.py --to agy --limit 20 --apply
+
+# Import Antigravity conversations directly as native OMP v3 sessions
+python ctxbridge_import.py --to omp --id latest --apply
+python ctxbridge_import.py --to omp --all --apply
 ```
 
 ## Tests
@@ -96,8 +100,8 @@ python -m unittest discover -v
 
 ## Files
 
-- `ctxbridge_mcp.py`: Pure-stdlib stdio JSON-RPC 2.0 MCP server (6 tools)
-- `ctxbridge_import.py`: OMP-to-Antigravity native conversation DB converter (`--id`, `--limit N`, `--all`, `--apply`) with native `CHECKPOINT` (`step_type=23`) compaction mapping and assistant fragment merging
+- `ctxbridge_mcp.py`: Pure-stdlib stdio JSON-RPC 2.0 MCP server (7 tools)
+- `ctxbridge_import.py`: Two-way native converter (`--to agy|omp`, `--id`, `--limit N`, `--all`, `--apply`) with native `CHECKPOINT` (`step_type=23`) compaction mapping and two-way image/blob bridging
 - `ctxbridge.py`: Core session parser, redactor, token budgeter, and CLI
 - `ctxbridge_gui.py`: Optional tkinter front end
 - `test_ctxbridge.py` & `test_ctxbridge_mcp.py`: Unit and stdio subprocess test suites

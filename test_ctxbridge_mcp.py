@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Unit and stdio subprocess tests for ctxbridge_mcp.py."""
 
+import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,6 +16,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ctxbridge  # noqa: E402
 import ctxbridge_mcp  # noqa: E402
 
+TINY_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
+
 
 def _make_fixtures(root: Path, home: Path) -> tuple[Path, Path, Path]:
     omp_dir = root / "omp_agent"
@@ -23,7 +29,14 @@ def _make_fixtures(root: Path, home: Path) -> tuple[Path, Path, Path]:
     proj_dir = home / "projects" / "demo-app"
     proj_dir.mkdir(parents=True, exist_ok=True)
 
-    # OMP session JSONL + history.db
+    # OMP blob + session JSONL + history.db
+    blobs_dir = omp_dir / "blobs"
+    blobs_dir.mkdir(parents=True, exist_ok=True)
+    png_hash = hashlib.sha256(TINY_PNG).hexdigest()
+    (blobs_dir / png_hash).write_bytes(TINY_PNG)
+    (blobs_dir / f"{png_hash}.png").write_bytes(TINY_PNG)
+    blob_ref = f"blob:sha256:{png_hash}"
+
     sess_dir = omp_dir / "sessions" / "--demo--"
     sess_dir.mkdir(parents=True, exist_ok=True)
     sess_file = sess_dir / "2026-11-19T01-00-00Z_omp12345678.jsonl"
@@ -31,11 +44,22 @@ def _make_fixtures(root: Path, home: Path) -> tuple[Path, Path, Path]:
     lines = [
         {"type": "session", "id": "omp12345678", "cwd": str(proj_dir), "timestamp": "2026-11-19T01:00:00Z"},
         {"type": "title", "title": "Fix auth flow in demo-app"},
-        {"type": "message", "timestamp": "2026-11-19T01:00:10Z", "message": {"role": "user", "content": [{"type": "text", "text": "Initial check before compaction"}]}},
+        {
+            "type": "message",
+            "timestamp": "2026-11-19T01:00:10Z",
+            "message": {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Initial check before compaction"},
+                    {"type": "image", "data": blob_ref, "mimeType": "image/png"},
+                ],
+            },
+        },
         {"type": "message", "timestamp": "2026-11-19T01:00:20Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "Looked at initial auth files."}]}},
         {"type": "compaction", "timestamp": "2026-11-19T01:01:00Z", "summary": f"OMP checked {proj_dir} and saw token={fake_sk}"},
         {"type": "message", "timestamp": "2026-11-19T01:02:00Z", "message": {"role": "user", "content": [{"type": "text", "text": "Please check login.py"}]}},
         {"type": "message", "timestamp": "2026-11-19T01:02:10Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "Inspecting login.py..."}]}},
+        {"type": "message", "timestamp": "2026-11-19T01:02:15Z", "message": {"role": "toolResult", "content": [{"type": "image", "data": blob_ref, "mimeType": "image/png"}]}},
         {"type": "message", "timestamp": "2026-11-19T01:02:20Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "Fixed CORS bug in login.py"}]}},
     ]
     sess_file.write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
@@ -84,11 +108,32 @@ def _make_fixtures(root: Path, home: Path) -> tuple[Path, Path, Path]:
     adb.commit()
     adb.close()
 
-    tdir = agy_dir / "brain" / "agy-conv-99998888" / ".system_generated" / "logs"
+    brain_conv = agy_dir / "brain" / "agy-conv-99998888"
+    brain_conv.mkdir(parents=True, exist_ok=True)
+    agy_img = brain_conv / "shot.png"
+    agy_img.write_bytes(TINY_PNG)
+    tdir = brain_conv / ".system_generated" / "logs"
     tdir.mkdir(parents=True, exist_ok=True)
     tlines = [
-        {"step_index": 0, "type": "USER_INPUT", "content": "<USER_REQUEST>\nMake it two-way MCP\n</USER_REQUEST>"},
-        {"step_index": 1, "type": "PLANNER_RESPONSE", "content": f"Implemented 5 tools using {home / 'secret.txt'}"},
+        {
+            "step_index": 0,
+            "type": "USER_INPUT",
+            "created_at": "2026-11-19T02:00:00Z",
+            "content": "<USER_REQUEST>\nMake it two-way MCP\n</USER_REQUEST>",
+            "media": [{"mime_type": "image/png", "uri": agy_img.as_posix()}],
+        },
+        {
+            "step_index": 1,
+            "type": "CHECKPOINT",
+            "created_at": "2026-11-19T02:00:30Z",
+            "content": f"Checkpoint summary with key {fake_ghp}",
+        },
+        {
+            "step_index": 2,
+            "type": "PLANNER_RESPONSE",
+            "created_at": "2026-11-19T02:01:00Z",
+            "content": f"Implemented 7 tools using {home / 'secret.txt'}",
+        },
     ]
     (tdir / "transcript_full.jsonl").write_text("\n".join(json.dumps(x) for x in tlines) + "\n", encoding="utf-8")
 
@@ -130,7 +175,7 @@ class McpUnitTests(unittest.TestCase):
         names = [t["name"] for t in tools_resp["result"]["tools"]]
         self.assertEqual(
             names,
-            ["list_sessions", "get_context_pack", "search_sessions", "save_handoff", "get_handoff", "import_omp_to_agy"],
+            ["list_sessions", "get_context_pack", "search_sessions", "save_handoff", "get_handoff", "import_omp_to_agy", "import_agy_to_omp"],
         )
         unk = ctxbridge_mcp.handle_request({"jsonrpc": "2.0", "id": 4, "method": "unknown/foo"})
         self.assertEqual(unk["error"]["code"], -32601)
@@ -238,6 +283,7 @@ class McpUnitTests(unittest.TestCase):
         self.assertTrue(res["summary_db_updated"])
         self.assertEqual(res["checkpoints"], 1)
         self.assertEqual(res["user_turns"], 2)
+        self.assertGreaterEqual(res["images_copied"], 2)
         cid = res["conversation_id"]
         conv_db = self.agy_dir / "conversations" / f"{cid}.db"
         self.assertTrue(conv_db.is_file())
@@ -252,14 +298,21 @@ class McpUnitTests(unittest.TestCase):
         self.assertGreater(len(tmb[0][1]), 10)
         # Timeline: pre-user(14), pre-asst(15), compaction CHECKPOINT(23), post-user(14), merged post-asst(15)
         self.assertEqual([s[1] for s in steps], [14, 15, 23, 14, 15])
+        self.assertIn(b"omp_media", steps[0][2])
         self.assertNotIn(b"sk-" + (b"A" * 20), steps[2][2])
         self.assertIn(b"[REDACTED:", steps[2][2])
         self.assertIn(b"Inspecting login.py...", steps[4][2])
         self.assertIn(b"Fixed CORS bug in login.py", steps[4][2])
+        self.assertIn(b"![OMP image", steps[4][2])
+
+        media_files = list((self.agy_dir / "brain" / cid / "omp_media").glob("*.png"))
+        self.assertGreaterEqual(len(media_files), 2)
 
         tpath = self.agy_dir / "brain" / cid / ".system_generated" / "logs" / "transcript.jsonl"
-        t_types = [json.loads(x)["type"] for x in tpath.read_text(encoding="utf-8").splitlines() if x.strip()]
+        t_records = [json.loads(x) for x in tpath.read_text(encoding="utf-8").splitlines() if x.strip()]
+        t_types = [r["type"] for r in t_records]
         self.assertEqual(t_types, ["USER_INPUT", "PLANNER_RESPONSE", "CHECKPOINT", "USER_INPUT", "PLANNER_RESPONSE"])
+        self.assertTrue(t_records[0].get("media"))
 
         annot = self.agy_dir / "annotations" / f"{cid}.pbtxt"
         self.assertTrue(annot.is_file())
@@ -287,6 +340,62 @@ class McpUnitTests(unittest.TestCase):
         )
         self.assertFalse(batch_resp["result"]["isError"])
         bres = json.loads(batch_resp["result"]["content"][0]["text"])
+        self.assertEqual(bres["imported_count"], 1)
+
+    def test_import_agy_to_omp_creates_valid_jsonl_blob_and_history(self):
+        resp = ctxbridge_mcp.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 24,
+                "method": "tools/call",
+                "params": {
+                    "name": "import_agy_to_omp",
+                    "arguments": {"id": "latest", "apply": True},
+                },
+            }
+        )
+        self.assertFalse(resp["result"]["isError"])
+        res = json.loads(resp["result"]["content"][0]["text"])
+        self.assertEqual(res["status"], "imported")
+        self.assertTrue(res["history_db_updated"])
+        self.assertEqual(res["images_copied"], 1)
+        omp_sid = res["omp_session_id"]
+
+        jsonl_files = list((self.omp_dir / "sessions").rglob(f"*_{omp_sid}.jsonl"))
+        self.assertEqual(len(jsonl_files), 1)
+        entries = [json.loads(x) for x in jsonl_files[0].read_text(encoding="utf-8").splitlines() if x.strip()]
+        self.assertEqual(entries[0]["type"], "title")
+        self.assertTrue(entries[0]["title"].startswith("[AGY]"))
+        self.assertEqual(entries[1]["type"], "session")
+        self.assertEqual(entries[2]["type"], "message")
+        self.assertEqual(entries[2]["message"]["role"], "user")
+        img_blocks = [b for b in entries[2]["message"]["content"] if b.get("type") == "image"]
+        self.assertEqual(len(img_blocks), 1)
+        self.assertTrue(img_blocks[0]["data"].startswith("blob:sha256:"))
+        digest = img_blocks[0]["data"].split(":")[-1]
+        self.assertTrue((self.omp_dir / "blobs" / digest).is_file())
+        self.assertEqual(entries[3]["type"], "compaction")
+        self.assertIn("[REDACTED:github_token]", entries[3]["summary"])
+        self.assertNotIn("ghp_" + ("B" * 24), entries[3]["summary"])
+        self.assertEqual(entries[4]["type"], "message")
+        self.assertEqual(entries[4]["message"]["role"], "assistant")
+
+        hcon = sqlite3.connect(str(self.omp_dir / "history.db"))
+        trow = hcon.execute("SELECT title FROM session_titles WHERE session_id=?", (omp_sid,)).fetchone()
+        hcon.close()
+        self.assertIsNotNone(trow)
+        self.assertTrue(trow[0].startswith("[AGY]"))
+
+        # Verify ping-pong prevention: batch import_omp_to_agy skips [AGY] sessions
+        batch_back = ctxbridge_mcp.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 25,
+                "method": "tools/call",
+                "params": {"name": "import_omp_to_agy", "arguments": {"id": "all", "limit": 10, "apply": True}},
+            }
+        )
+        bres = json.loads(batch_back["result"]["content"][0]["text"])
         self.assertEqual(bres["imported_count"], 1)
 
 
@@ -327,7 +436,7 @@ class McpStdioSubprocessTests(unittest.TestCase):
             lines = [json.loads(line) for line in proc.stdout.strip().splitlines() if line.strip()]
             self.assertEqual(len(lines), 3)
             self.assertEqual(lines[0]["id"], 1)
-            self.assertEqual(len(lines[1]["result"]["tools"]), 6)
+            self.assertEqual(len(lines[1]["result"]["tools"]), 7)
             sessions = json.loads(lines[2]["result"]["content"][0]["text"])["sessions"]
             self.assertEqual(len(sessions), 2)
 

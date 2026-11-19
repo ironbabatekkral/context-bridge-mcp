@@ -191,6 +191,33 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "import_agy_to_omp",
+        "description": "Convert one or batch-import Antigravity conversations into native OMP v3 .jsonl sessions with blobs and history.db entries.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "default": "latest",
+                    "description": "Antigravity conversation ID prefix (min 8 chars), 'latest', or 'all' for batch import.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 20,
+                    "minimum": 1,
+                    "maximum": 500,
+                    "description": "Max sessions to import when id='all' (1..500).",
+                },
+                "apply": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Write files when true, or dry-run when false.",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -560,6 +587,24 @@ def tool_import_omp_to_agy(args: dict[str, Any]) -> str:
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 
+def tool_import_agy_to_omp(args: dict[str, Any]) -> str:
+    ident = str(args.get("id") or "latest")
+    limit = _clamp_int(args.get("limit"), 20, 1, 500)
+    apply = bool(args.get("apply", True))
+    if ident.lower() == "all":
+        res = ctxbridge_import.import_agy_batch(
+            limit=limit,
+            all_sessions=False,
+            apply=apply,
+        )
+    else:
+        res = ctxbridge_import.import_agy_to_omp(
+            ident=ident,
+            apply=apply,
+        )
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
 TOOL_DISPATCH = {
     "list_sessions": tool_list_sessions,
     "get_context_pack": tool_get_context_pack,
@@ -567,6 +612,7 @@ TOOL_DISPATCH = {
     "save_handoff": tool_save_handoff,
     "get_handoff": tool_get_handoff,
     "import_omp_to_agy": tool_import_omp_to_agy,
+    "import_agy_to_omp": tool_import_agy_to_omp,
 }
 
 
